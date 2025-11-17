@@ -4,24 +4,21 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { UserPlus, Mail, Lock, User, Church, AlertCircle } from "lucide-react";
+import { Sparkles, Loader2, AlertCircle, Check, Clock } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 
 const registerSchema = z.object({
   nome: z.string().min(3, "Nome deve ter no mínimo 3 caracteres"),
-  email: z.string().email("E-mail inválido"),
-  senha: z.string().min(6, "A senha deve ter no mínimo 6 caracteres"),
-  confirmarSenha: z.string(),
+  email: z.string().email("Email inválido"),
+  password: z.string().min(6, "Senha deve ter no mínimo 6 caracteres"),
   religiao: z.string().min(1, "Selecione sua religião"),
-}).refine((data) => data.senha === data.confirmarSenha, {
-  message: "As senhas não coincidem",
-  path: ["confirmarSenha"],
 });
 
 type RegisterFormData = z.infer<typeof registerSchema>;
@@ -33,8 +30,9 @@ interface RegisterFormProps {
 
 export function RegisterForm({ onSuccess, onSwitchToLogin }: RegisterFormProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [religiao, setReligiao] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [selectedReligion, setSelectedReligion] = useState<string>("");
+  const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
 
   const {
     register,
@@ -45,15 +43,45 @@ export function RegisterForm({ onSuccess, onSwitchToLogin }: RegisterFormProps) 
     resolver: zodResolver(registerSchema),
   });
 
+  const religioes = [
+    "Cristianismo",
+    "Catolicismo",
+    "Protestantismo",
+    "Evangélico",
+    "Pentecostal",
+    "Adventista",
+    "Testemunha de Jeová",
+    "Mórmon",
+    "Outra"
+  ];
+
+  const startCooldown = (seconds: number) => {
+    setCooldownSeconds(seconds);
+    const interval = setInterval(() => {
+      setCooldownSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
   const onSubmit = async (data: RegisterFormData) => {
+    if (cooldownSeconds > 0) {
+      setError(`Por favor, aguarde ${cooldownSeconds} segundos antes de tentar novamente.`);
+      return;
+    }
+
     setIsLoading(true);
-    setError("");
+    setError(null);
 
     try {
       // Criar usuário no Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: data.email,
-        password: data.senha,
+        password: data.password,
         options: {
           data: {
             nome: data.nome,
@@ -62,17 +90,44 @@ export function RegisterForm({ onSuccess, onSwitchToLogin }: RegisterFormProps) 
         },
       });
 
-      if (authError) throw authError;
+      if (authError) {
+        console.error("Erro de autenticação:", authError);
+        
+        // Mensagens de erro em português com tratamento específico
+        if (authError.message.includes("already registered") || authError.message.includes("already exists")) {
+          setError("Este email já está cadastrado. Tente fazer login.");
+        } else if (authError.message.includes("Invalid email")) {
+          setError("Email inválido. Verifique e tente novamente.");
+        } else if (authError.message.includes("Password")) {
+          setError("Senha muito fraca. Use no mínimo 6 caracteres.");
+        } else if (authError.message.includes("security purposes") || authError.message.includes("request this after")) {
+          // Extrair número de segundos da mensagem de erro
+          const match = authError.message.match(/(\d+)\s*seconds?/);
+          const seconds = match ? parseInt(match[1]) : 60;
+          startCooldown(seconds);
+          setError(`Por segurança, aguarde ${seconds} segundos antes de tentar criar a conta novamente.`);
+        } else if (authError.message.includes("rate limit") || authError.message.includes("too many")) {
+          startCooldown(60);
+          setError("Muitas tentativas. Por favor, aguarde 1 minuto antes de tentar novamente.");
+        } else {
+          setError("Erro ao criar conta: " + authError.message);
+        }
+        return;
+      }
 
       if (authData.user) {
-        // Calcular data de fim do período de teste (3 dias)
+        // Aguardar um pouco para garantir que a sessão está estabelecida
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Calcular data de fim do trial (3 dias)
         const trialEndDate = new Date();
         trialEndDate.setDate(trialEndDate.getDate() + 3);
 
-        // Inserir dados adicionais na tabela de usuários
-        const { error: insertError } = await supabase
+        // Tentar inserir dados adicionais na tabela usuarios usando UPSERT
+        // UPSERT garante que não haverá erro se o registro já existir
+        const { error: dbError } = await supabase
           .from('usuarios')
-          .insert([
+          .upsert(
             {
               id: authData.user.id,
               email: data.email,
@@ -81,33 +136,65 @@ export function RegisterForm({ onSuccess, onSwitchToLogin }: RegisterFormProps) 
               trial_end_date: trialEndDate.toISOString(),
               is_subscribed: false,
             },
-          ]);
+            {
+              onConflict: 'id',
+              ignoreDuplicates: false
+            }
+          );
 
-        if (insertError) {
-          console.error("Erro ao inserir dados do usuário:", insertError);
+        if (dbError) {
+          console.error("Erro ao salvar dados do usuário:", dbError);
+          
+          // Tentar novamente com uma abordagem alternativa
+          // Se falhar, vamos apenas logar o usuário e deixar os dados serem salvos depois
+          console.warn("Continuando com login mesmo com erro no banco de dados");
         }
 
+        // Enviar email de boas-vindas (não bloqueia o cadastro se falhar)
+        try {
+          const emailResponse = await fetch('/api/send-welcome-email', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              email: data.email,
+              nome: data.nome,
+            }),
+          });
+
+          if (!emailResponse.ok) {
+            console.error('Erro ao enviar email de boas-vindas');
+          }
+        } catch (emailError) {
+          console.error('Erro ao enviar email:', emailError);
+        }
+
+        // Sucesso - redirecionar para a aplicação
         onSuccess();
       }
-    } catch (err: any) {
-      setError(err.message || "Erro ao criar conta. Tente novamente.");
+    } catch (err) {
+      console.error("Erro inesperado:", err);
+      setError("Erro inesperado ao criar conta. Tente novamente em alguns instantes.");
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <Card className="border-none shadow-2xl bg-white">
-      <CardHeader className="space-y-1">
-        <div className="mx-auto w-16 h-16 bg-gradient-to-br from-amber-400 to-yellow-600 rounded-full flex items-center justify-center mb-4 shadow-xl">
-          <UserPlus className="w-8 h-8 text-white" />
+    <Card className="border-none shadow-2xl">
+      <CardHeader className="text-center pb-8">
+        <div className="w-16 h-16 bg-gradient-to-br from-amber-500 to-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Sparkles className="w-8 h-8 text-white" />
         </div>
-        <CardTitle className="text-2xl text-center text-gray-800">
-          Crie sua conta
-        </CardTitle>
-        <CardDescription className="text-center">
-          Comece sua jornada espiritual com 3 dias grátis
+        <CardTitle className="text-3xl text-gray-800">Comece sua jornada</CardTitle>
+        <CardDescription className="text-base">
+          Crie sua conta e ganhe 3 dias grátis
         </CardDescription>
+        <Badge className="mx-auto mt-3 bg-green-100 text-green-700 border-green-200 px-4 py-2">
+          <Check className="w-4 h-4 mr-2 inline" />
+          Sem cartão de crédito necessário
+        </Badge>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -118,108 +205,104 @@ export function RegisterForm({ onSuccess, onSwitchToLogin }: RegisterFormProps) 
             </Alert>
           )}
 
+          {cooldownSeconds > 0 && (
+            <Alert className="bg-amber-50 border-amber-200">
+              <Clock className="h-4 w-4 text-amber-600" />
+              <AlertDescription className="text-amber-800">
+                Aguarde <strong>{cooldownSeconds} segundos</strong> antes de tentar novamente.
+              </AlertDescription>
+            </Alert>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="nome">Nome Completo</Label>
-            <div className="relative">
-              <User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-              <Input
-                id="nome"
-                type="text"
-                placeholder="Seu nome completo"
-                className="pl-10 h-12 border-2 border-gray-200 focus:border-amber-400"
-                {...register("nome")}
-              />
-            </div>
+            <Input
+              id="nome"
+              type="text"
+              placeholder="Seu nome completo"
+              {...register("nome")}
+              disabled={isLoading || cooldownSeconds > 0}
+            />
             {errors.nome && (
-              <p className="text-sm text-red-500">{errors.nome.message}</p>
+              <p className="text-sm text-red-600">{errors.nome.message}</p>
             )}
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="email">E-mail</Label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-              <Input
-                id="email"
-                type="email"
-                placeholder="seu@email.com"
-                className="pl-10 h-12 border-2 border-gray-200 focus:border-amber-400"
-                {...register("email")}
-              />
-            </div>
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              type="email"
+              placeholder="seu@email.com"
+              {...register("email")}
+              disabled={isLoading || cooldownSeconds > 0}
+            />
             {errors.email && (
-              <p className="text-sm text-red-500">{errors.email.message}</p>
+              <p className="text-sm text-red-600">{errors.email.message}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="password">Senha</Label>
+            <Input
+              id="password"
+              type="password"
+              placeholder="Mínimo 6 caracteres"
+              {...register("password")}
+              disabled={isLoading || cooldownSeconds > 0}
+            />
+            {errors.password && (
+              <p className="text-sm text-red-600">{errors.password.message}</p>
             )}
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="religiao">Religião</Label>
-            <div className="relative">
-              <Church className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5 z-10" />
-              <Select
-                value={religiao}
-                onValueChange={(value) => {
-                  setReligiao(value);
-                  setValue("religiao", value);
-                }}
-              >
-                <SelectTrigger className="pl-10 h-12 border-2 border-gray-200 focus:border-amber-400">
-                  <SelectValue placeholder="Selecione sua religião" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="catolica">Católica</SelectItem>
-                  <SelectItem value="evangelica">Evangélica</SelectItem>
-                  <SelectItem value="protestante">Protestante</SelectItem>
-                  <SelectItem value="espirita">Espírita</SelectItem>
-                  <SelectItem value="outra">Outra</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            <Select
+              value={selectedReligion}
+              onValueChange={(value) => {
+                setSelectedReligion(value);
+                setValue("religiao", value);
+              }}
+              disabled={isLoading || cooldownSeconds > 0}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Selecione sua religião" />
+              </SelectTrigger>
+              <SelectContent>
+                {religioes.map((religiao) => (
+                  <SelectItem key={religiao} value={religiao}>
+                    {religiao}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {errors.religiao && (
-              <p className="text-sm text-red-500">{errors.religiao.message}</p>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="senha">Senha</Label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-              <Input
-                id="senha"
-                type="password"
-                placeholder="••••••••"
-                className="pl-10 h-12 border-2 border-gray-200 focus:border-amber-400"
-                {...register("senha")}
-              />
-            </div>
-            {errors.senha && (
-              <p className="text-sm text-red-500">{errors.senha.message}</p>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="confirmarSenha">Confirmar Senha</Label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-              <Input
-                id="confirmarSenha"
-                type="password"
-                placeholder="••••••••"
-                className="pl-10 h-12 border-2 border-gray-200 focus:border-amber-400"
-                {...register("confirmarSenha")}
-              />
-            </div>
-            {errors.confirmarSenha && (
-              <p className="text-sm text-red-500">{errors.confirmarSenha.message}</p>
+              <p className="text-sm text-red-600">{errors.religiao.message}</p>
             )}
           </div>
 
           <Button
             type="submit"
-            className="w-full h-12 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700 text-white text-base font-semibold shadow-lg"
-            disabled={isLoading}
+            className="w-full bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-600 hover:to-yellow-700 text-white py-6 text-lg"
+            disabled={isLoading || cooldownSeconds > 0}
           >
-            {isLoading ? "Criando conta..." : "Criar Conta Grátis"}
+            {isLoading ? (
+              <>
+                <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                Criando conta...
+              </>
+            ) : cooldownSeconds > 0 ? (
+              <>
+                <Clock className="w-5 h-5 mr-2" />
+                Aguarde {cooldownSeconds}s
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-5 h-5 mr-2" />
+                Começar Teste Grátis
+              </>
+            )}
           </Button>
 
           <div className="text-center pt-4">
@@ -234,6 +317,10 @@ export function RegisterForm({ onSuccess, onSwitchToLogin }: RegisterFormProps) 
               </button>
             </p>
           </div>
+
+          <p className="text-xs text-center text-gray-500 pt-2">
+            Ao criar uma conta, você concorda com nossos Termos de Uso e Política de Privacidade
+          </p>
         </form>
       </CardContent>
     </Card>

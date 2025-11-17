@@ -24,10 +24,37 @@ export default function Home() {
   const [favorites, setFavorites] = useState<string[]>([]);
   const [communityPost, setCommunityPost] = useState("");
   const [communityPosts, setCommunityPosts] = useState<any[]>([]);
+  const [motivationalMessage, setMotivationalMessage] = useState("");
+
+  const motivationalMessages = [
+    "🌟 Deus tem um plano perfeito para sua vida. Confie!",
+    "💪 Com fé, você pode mover montanhas. Acredite!",
+    "✨ Hoje é um novo dia cheio de bênçãos. Aproveite!",
+    "🙏 A oração é a chave que abre as portas do impossível.",
+    "❤️ O amor de Deus por você é infinito e incondicional.",
+    "🌈 Depois da tempestade, sempre vem o arco-íris.",
+    "🔥 Sua fé é maior que qualquer desafio. Continue firme!",
+    "🌺 Deus está preparando algo maravilhoso para você.",
+    "⭐ Você é especial e amado por Deus. Nunca esqueça!",
+    "🎯 Mantenha o foco em Deus e tudo se encaixará.",
+    "🌻 Cada dia é uma nova oportunidade de crescer na fé.",
+    "💎 Você é precioso aos olhos de Deus.",
+    "🕊️ A paz de Deus está com você neste momento.",
+    "🌟 Sua história está sendo escrita por Deus. Confie no processo!",
+    "🙌 Louve a Deus em todos os momentos da sua vida.",
+    "🌸 Deus transforma desertos em jardins floridos.",
+    "💫 Você foi criado para fazer a diferença no mundo.",
+    "🎁 Cada dia é um presente de Deus. Agradeça!",
+    "🔆 Deixe a luz de Cristo brilhar através de você.",
+    "🌊 Deus acalma as tempestades da sua vida."
+  ];
 
   useEffect(() => {
     checkUser();
     loadCommunityPosts();
+    // Seleciona uma mensagem motivacional aleatória ao carregar o app
+    const randomMessage = motivationalMessages[Math.floor(Math.random() * motivationalMessages.length)];
+    setMotivationalMessage(randomMessage);
   }, []);
 
   const checkUser = async () => {
@@ -193,19 +220,19 @@ export default function Home() {
     {
       title: "Mensagem de Hoje",
       date: "14 de Janeiro de 2025",
-      content: "\"Porque Deus amou o mundo de tal maneira que deu o seu Filho unigênito, para que todo aquele que nele crê não pereça, mas tenha a vida eterna.\" - João 3:16",
+      content: "Porque Deus amou o mundo de tal maneira que deu o seu Filho unigênito, para que todo aquele que nele crê não pereça, mas tenha a vida eterna. - João 3:16",
       reflection: "O amor de Deus por nós é incondicional e eterno. Hoje, reflita sobre como você pode demonstrar esse amor divino em suas ações e palavras. Seja uma luz para aqueles ao seu redor."
     },
     {
       title: "Reflexão Matinal",
       date: "14 de Janeiro de 2025",
-      content: "\"Entrega o teu caminho ao Senhor; confia nele, e ele o fará.\" - Salmos 37:5",
+      content: "Entrega o teu caminho ao Senhor; confia nele, e ele o fará. - Salmos 37:5",
       reflection: "Confie no plano de Deus para sua vida. Mesmo quando as coisas parecem incertas, Ele está no controle. Entregue suas preocupações a Ele e encontre paz."
     },
     {
       title: "Palavra de Fé",
       date: "14 de Janeiro de 2025",
-      content: "\"Tudo posso naquele que me fortalece.\" - Filipenses 4:13",
+      content: "Tudo posso naquele que me fortalece. - Filipenses 4:13",
       reflection: "Com Cristo, você tem força para enfrentar qualquer desafio. Não importa o que você esteja passando hoje, lembre-se de que Deus está com você, fortalecendo cada passo."
     }
   ];
@@ -465,7 +492,7 @@ export default function Home() {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <p className="text-gray-700 leading-relaxed italic">"{testimonial.text}"</p>
+                    <p className="text-gray-700 leading-relaxed italic">&quot;{testimonial.text}&quot;</p>
                   </CardContent>
                 </Card>
               ))}
@@ -709,6 +736,21 @@ export default function Home() {
   // App View (Authenticated)
   return (
     <div className="min-h-screen bg-gradient-to-b from-white via-sky-50 to-blue-50">
+      {/* Mensagem Motivacional */}
+      {user && (
+        <div className="bg-gradient-to-r from-amber-500 via-yellow-500 to-orange-500 text-white py-4 px-4 shadow-lg">
+          <div className="container mx-auto">
+            <div className="flex items-center justify-center gap-3 animate-pulse">
+              <Sparkles className="w-6 h-6 flex-shrink-0" />
+              <p className="text-center text-lg font-semibold">
+                {motivationalMessage}
+              </p>
+              <Sparkles className="w-6 h-6 flex-shrink-0" />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* App Header */}
       <header className="bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-lg sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4">
